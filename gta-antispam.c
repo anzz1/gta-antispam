@@ -40,12 +40,14 @@ __forceinline static char* _strncpy(char* dst, const char* src, unsigned int len
   *dst = 0;
   return dst;
 }
-__forceinline static int _strcmp(const char* s1, const char* s2) {
-  while (*s1 == *s2) { 
-    if (*s1 == 0) return 0;
-    s1++; s2++;
+__forceinline static int _strncmp(const char* s1, const char* s2, unsigned int len) {
+  unsigned int i;
+  for (i = 0; i < len; i++) {
+    if (s1[i] > s2[i]) return 1;
+    else if (s2[i] > s1[i]) return -1;
+    else if (s1[i] == 0) return 0;
   }
-  return (*s1 > *s2) ? 1 : -1;
+  return 0;
 }
 
 // s2 should be in lowercase
@@ -92,7 +94,7 @@ __int64 my_chat_receive(void* v1, void* v2, void* v3, const char* msg, char team
   if (*msg != 0) {
     char* line;
 
-    if (!_strcmp(last_msg, msg)) // if message is duplicate, skip it
+    if (!_strncmp(last_msg, msg, 254)) // if message is duplicate, skip it
       return 0;
 
     line = filter;
