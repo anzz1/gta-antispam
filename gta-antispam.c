@@ -5,6 +5,7 @@
  *    for GTAV v1.61 (1.0.2699.0)
  *
  *  - Blocks duplicate messages
+ *  - Blocks messages longer than 200 characters
  *  - Filters messages containing a blacklisted phrase
  *      Blacklist is loaded from blacklist.txt, one phrase per line, in lowercase
  *
@@ -40,14 +41,17 @@ __forceinline static char* _strncpy(char* dst, const char* src, unsigned int len
   *dst = 0;
   return dst;
 }
-__forceinline static int _strncmp(const char* s1, const char* s2, unsigned int len) {
-  unsigned int i;
-  for (i = 0; i < len; i++) {
-    if (s1[i] > s2[i]) return 1;
-    else if (s2[i] > s1[i]) return -1;
-    else if (s1[i] == 0) return 0;
+__forceinline static int _strcmp(const char* s1, const char* s2) {
+  while (*s1 == *s2) { 
+    if (*s1 == 0) return 0;
+    s1++; s2++;
   }
-  return 0;
+  return (*s1 > *s2) ? 1 : -1;
+}
+__forceinline static unsigned int _strlen(const char* s) {
+  unsigned int i = 0;
+  while (s[i] != 0) i++;
+  return i;
 }
 
 // s2 should be in lowercase
@@ -83,7 +87,7 @@ __forceinline static char* read_next_line(char* s) {
 }
 
 BYTE m_chat_receive_stub[] = {0x48,0x8B,0xC4,0x48,0x89,0x58,0x08,0xFF,0x25,0,0,0,0,0,0,0,0,0,0,0,0};
-char last_msg[256];
+char last_msg[202];
 
 // this function will receive the chat messages
 __declspec(noinline) 
@@ -94,7 +98,10 @@ __int64 my_chat_receive(void* v1, void* v2, void* v3, const char* msg, char team
   if (*msg != 0) {
     char* line;
 
-    if (!_strncmp(last_msg, msg, 254)) // if message is duplicate, skip it
+    if (_strlen(msg) > 200) // skip messages containing over 200 characters
+      return 0;
+
+    if (!_strcmp(last_msg, msg)) // if message is duplicate, skip it
       return 0;
 
     line = filter;
@@ -104,7 +111,7 @@ __int64 my_chat_receive(void* v1, void* v2, void* v3, const char* msg, char team
       line = read_next_line(line);
     }
 
-    _strncpy(last_msg, msg, 254); // save message to last_msg
+    _strncpy(last_msg, msg, 200); // save message to last_msg
   }
 
   // call the "original" func
