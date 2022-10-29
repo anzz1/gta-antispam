@@ -2,7 +2,7 @@
 
 /*
  *  Simple POC example for filtering chat spam in GTAV
- *    for GTAV v1.61 (1.0.2699.0)
+ *    for GTAV v1.63 (1.0.2699.16)
  *
  *  - Blocks duplicate messages
  *  - Blocks messages longer than 200 characters
@@ -27,47 +27,23 @@ __forceinline static char* _strrchr(const char* s, char c) {
   }
   return p;
 }
-__forceinline static char* _strcpy(char* dst, const char* src) {
+__forceinline static void _strcpy(char* dst, const char* src) {
   while (*src != 0) *dst++ = *src++;
   *dst = 0;
-  return dst;
-}
-__forceinline static char* _strncpy(char* dst, const char* src, unsigned int len) {
-  unsigned int i;
-  for (i = 0; i < len; i++) {
-    if (*src == 0) break;
-    *dst++ = *src++;
-  }
-  *dst = 0;
-  return dst;
-}
-__forceinline static int _strcmp(const char* s1, const char* s2) {
-  while (*s1 == *s2) { 
-    if (*s1 == 0) return 0;
-    s1++; s2++;
-  }
-  return (*s1 > *s2) ? 1 : -1;
-}
-__forceinline static unsigned int _strlen(const char* s) {
-  unsigned int i = 0;
-  while (s[i] != 0) i++;
-  return i;
 }
 
 // s2 should be in lowercase
-__forceinline static const char* _stristr(const char* s1, const char* s2) {
+__forceinline static char* _stristr(const char* s1, const char* s2) {
   unsigned int i;
-  char c;
-  while (*s1 != 0) {
+  char c, *pos;
+  for (pos = (char*)s1; *pos != 0; pos++) {
     i = 0;
-    while (1) {
-      if (s2[i] == 0) return s1;
-      if (s1[i] == 0) break;
-      c = (s1[i]>64 && s1[i]<91) ? (s1[i]+32):s1[i]; // A-Z -> a-z
+    do {
+      if (s2[i] == 0) return pos;
+      if (pos[i] == 0) break;
+      c = (pos[i]>64 && pos[i]<91) ? (pos[i]+32):pos[i]; // A-Z -> a-z
       if (s2[i] != c) break;
-      i++;
-    }
-    s1++;
+    } while (++i);
   }
   return 0;
 }
@@ -86,23 +62,68 @@ __forceinline static char* read_next_line(char* s) {
   return s;
 }
 
-BYTE m_chat_receive_stub[] = {0x48,0x8B,0xC4,0x48,0x89,0x58,0x08,0xFF,0x25,0,0,0,0,0,0,0,0,0,0,0,0};
-char last_msg[202];
+__forceinline static DWORD calc_disp32(ULONG_PTR src, ULONG_PTR dst)
+{
+  ULONG_PTR diff = 0;
+  if (src > dst)
+    diff = src-dst;
+  else
+    diff = dst-src;
 
-// this function will receive the chat messages
+  if (diff > 0xFFFFFFF0)
+    return 0;
+
+  // disp32 = target - disp32_ptr - 4
+  return (DWORD)(dst-src-4);
+}
+
+/*
+ *  push rcx                  // save arg1
+ *  push rdx                  // save arg2
+ *  push r8                   // save arg3
+ *  sub rsp,0x28              // move stack by 40 bytes
+ *  mov rcx, r9               // arg4 -> arg1
+ *  lea r11, 00000000         // [rip+disp32]
+ *  call r11                  // call my_chat_receive
+ *  add rsp,0x28              // restore stack
+ *  pop r8                    // restore arg3
+ *  pop rdx                   // restore arg2
+ *  pop rcx                   // restore arg1
+ *  test al,al                // check return from my_chat_receive
+ *  jz [rip+0x1A]             // jump to ret if zero
+ *  mov r9, rax               // restore arg4
+ *  mov rax, rsp              // orig function stub
+ *  mov [rax+8], rbx          // orig function stub
+ *  jmp QWORD PTR [rip+0x0]   // jmp to ret_jmp_ptr and don't return
+ *  0000000000000000          // ret_jmp_ptr addr
+ *  ret                       // skip message
+ *
+ */
+static BYTE m_chat_receive_stub[] = {
+  0x51,0x52,0x41,0x50,0x48,0x83,0xEC,0x28,0x4C,0x89,0xC9,0x4C,0x8D,0x1D,0,0,0,0,0x41,0xFF,
+  0xD3,0x48,0x83,0xC4,0x28,0x41,0x58,0x5A,0x59,0x84,0xC0,0x74,0x18,0x49,0x89,0xC1,0x48,0x89,0xE0,0x48,
+  0x89,0x58,0x08,0xFF,0x25,0,0,0,0,0,0,0,0,0,0,0,0,0xC3
+};
+
+static char last_msg[208];
+
+// this function will filter the chat messages
 __declspec(noinline) 
-__int64 my_chat_receive(void* v1, void* v2, void* v3, const char* msg, char team) {
+const char* my_chat_receive(const char* const msg) {
   if (!msg)
     return 0;
 
   if (*msg != 0) {
+    unsigned int i = 0;
     char* line;
-
-    if (_strlen(msg) > 200) // skip messages containing over 200 characters
-      return 0;
-
-    if (!_strcmp(last_msg, msg)) // if message is duplicate, skip it
-      return 0;
+    while (msg[i] == last_msg[i]) {
+      if (msg[i] == 0) return 0; // skip duplicate messages
+      i++;
+    }
+    while (msg[i] != 0) {
+      if (i > 200) return 0; // skip messages longer than 200 characters
+      i++;
+    }
 
     line = filter;
     while (line) {
@@ -111,11 +132,10 @@ __int64 my_chat_receive(void* v1, void* v2, void* v3, const char* msg, char team
       line = read_next_line(line);
     }
 
-    _strncpy(last_msg, msg, 200); // save message to last_msg
+    _strcpy(last_msg, msg); // save message to last_msg
   }
-
-  // call the "original" func
-  return ((__int64 (*)(void*, void*, void*, const char*, char))(void*)(m_chat_receive_stub))(v1, v2, v3, msg, team);
+  // return msg to call the original func
+  return msg;
 }
 
 // this is simple and slow, big boys use proper algos like Boyer-Moore-Horspool
@@ -144,9 +164,9 @@ __forceinline static BYTE* get_func_ptr() {
 
   addr = (ULONG_PTR)GetModuleHandleA(0); // start search at proc base addr
   memset(&memBI, 0, sizeof(memBI));
-  while (VirtualQueryEx((HANDLE)-1, (void*)addr, &memBI, sizeof(memBI))) {
-    // skip noncommitted, unreadable and guard pages
-    if ((memBI.State & MEM_COMMIT) && (memBI.Protect == ((memBI.Protect & ~(PAGE_NOACCESS | PAGE_GUARD)) | (memBI.Protect & (PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY | PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY))))) {
+  while (VirtualQuery((void*)addr, &memBI, sizeof(memBI))) {
+    // skip noncommitted, non-executable and guard pages
+    if ((memBI.State & MEM_COMMIT) && (memBI.Protect == ((memBI.Protect & ~(PAGE_NOACCESS | PAGE_GUARD)) | (memBI.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY))))) {
       res = find_pattern_wildcard((BYTE*)memBI.BaseAddress, (BYTE*)memBI.BaseAddress + memBI.RegionSize, search, search + (sizeof(search) / sizeof(search[0])), 0);
       if (res != (BYTE*)memBI.BaseAddress + memBI.RegionSize && res != search)
         return res; // found
@@ -188,6 +208,10 @@ __forceinline static void load_filter(HINSTANCE hInst) {
           filter += 3; // skip UTF-8 BOM
         while (*filter == 0 && filter < filter_end)
           filter++; // skip leading newlines
+        if (filter == filter_end) {
+          filter = 0;
+          filter_end = 0;
+        }
       }
     }
   }
@@ -202,6 +226,8 @@ DWORD __stdcall mainThread(void* param) {
   BYTE* func_ptr = 0;
   MEMORY_BASIC_INFORMATION memBI;
   HINSTANCE hInst;
+  DWORD disp32 = 0;
+  DWORD* disp32_ptr = 0;
 
   hInst = (HINSTANCE)param;
   last_msg[0] = 0;
@@ -214,23 +240,46 @@ DWORD __stdcall mainThread(void* param) {
   if (!func_ptr)
     return 0; // didn't find the sig
 
-  my_jmp_ptr = (ULONG_PTR*)((ULONG_PTR)func_ptr+6);
-  ret_jmp_ptr = (ULONG_PTR*)((ULONG_PTR)m_chat_receive_stub+13);
+  disp32_ptr = (DWORD*)((BYTE*)m_chat_receive_stub+14);
+  disp32 = calc_disp32((ULONG_PTR)disp32_ptr, (ULONG_PTR)my_chat_receive);
+  if (!disp32) 
+    return 0; // disp32 is too large
 
-  VirtualProtectEx((HANDLE)-1, (void*)ret_jmp_ptr, 8, PAGE_READWRITE, &old_rights);
-  *ret_jmp_ptr = (ULONG_PTR)func_ptr+16;
-  VirtualProtectEx((HANDLE)-1, (void*)ret_jmp_ptr, 8, PAGE_EXECUTE_READ, &old_rights);
+  my_jmp_ptr = (ULONG_PTR*)((ULONG_PTR)func_ptr+6);
+  ret_jmp_ptr = (ULONG_PTR*)((ULONG_PTR)m_chat_receive_stub+49);
 
   memset(&memBI, 0, sizeof(memBI));
-  VirtualQueryEx((HANDLE)-1, (void*)func_ptr, &memBI, sizeof(memBI));
+  VirtualQuery((void*)m_chat_receive_stub, &memBI, sizeof(memBI));
 
   old_rights = memBI.Protect;
-  new_rights = (old_rights & ~(PAGE_NOACCESS | PAGE_GUARD | PAGE_EXECUTE_WRITECOPY | PAGE_WRITECOPY)) | (old_rights & (PAGE_EXECUTE_READWRITE | PAGE_READWRITE));
+  new_rights = (old_rights & ~(PAGE_NOACCESS | PAGE_GUARD | PAGE_EXECUTE_WRITECOPY | PAGE_WRITECOPY | PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_READONLY)) | (old_rights & (PAGE_EXECUTE_READWRITE | PAGE_READWRITE));
 
   if (old_rights != new_rights) {
     if ((new_rights & (PAGE_EXECUTE_READWRITE | PAGE_READWRITE)) == 0)
       new_rights |= (old_rights & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_WRITECOPY)) ? PAGE_EXECUTE_READWRITE : PAGE_READWRITE;
-    VirtualProtectEx((HANDLE)-1, (void*)func_ptr, 14, new_rights, &old_rights);
+    VirtualProtect((void*)m_chat_receive_stub, 58, new_rights, &old_rights);
+  }
+
+  *disp32_ptr = disp32;
+  *ret_jmp_ptr = (ULONG_PTR)func_ptr+16;
+
+  new_rights = (old_rights & ~(PAGE_NOACCESS | PAGE_GUARD | PAGE_EXECUTE_WRITECOPY | PAGE_WRITECOPY | PAGE_READONLY | PAGE_READWRITE)) | (old_rights & (PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_READ | PAGE_EXECUTE));
+  if (old_rights != new_rights) {
+    if ((new_rights & (PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_READ | PAGE_EXECUTE)) == 0)
+      new_rights |= (old_rights & (PAGE_READWRITE | PAGE_WRITECOPY)) ? PAGE_EXECUTE_READWRITE : PAGE_EXECUTE_READ;
+    VirtualProtect((void*)m_chat_receive_stub, 58, new_rights, &old_rights);
+  }
+
+  memset(&memBI, 0, sizeof(memBI));
+  VirtualQuery((void*)func_ptr, &memBI, sizeof(memBI));
+
+  old_rights = memBI.Protect;
+  new_rights = (old_rights & ~(PAGE_NOACCESS | PAGE_GUARD | PAGE_EXECUTE_WRITECOPY | PAGE_WRITECOPY | PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_READONLY)) | (old_rights & (PAGE_EXECUTE_READWRITE | PAGE_READWRITE));
+
+  if (old_rights != new_rights) {
+    if ((new_rights & (PAGE_EXECUTE_READWRITE | PAGE_READWRITE)) == 0)
+      new_rights |= (old_rights & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_WRITECOPY)) ? PAGE_EXECUTE_READWRITE : PAGE_READWRITE;
+    VirtualProtect((void*)func_ptr, 14, new_rights, &old_rights);
   }
 
   func_ptr[0] = 0xFF;
@@ -239,10 +288,23 @@ DWORD __stdcall mainThread(void* param) {
   func_ptr[3] = 0x00;
   func_ptr[4] = 0x00;
   func_ptr[5] = 0x00;
-  *my_jmp_ptr = (ULONG_PTR)my_chat_receive;
+  *my_jmp_ptr = (ULONG_PTR)m_chat_receive_stub;
 
   if (old_rights != new_rights)
-    VirtualProtectEx((HANDLE)-1, (void*)func_ptr, 14, old_rights, &new_rights);
+    VirtualProtect((void*)func_ptr, 14, old_rights, &new_rights);
+
+  memset(&memBI, 0, sizeof(memBI));
+  VirtualQuery((void*)last_msg, &memBI, sizeof(memBI));
+
+  old_rights = memBI.Protect;
+  new_rights = (old_rights & ~(PAGE_NOACCESS | PAGE_GUARD | PAGE_EXECUTE_WRITECOPY | PAGE_WRITECOPY | PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_READONLY)) | (old_rights & (PAGE_EXECUTE_READWRITE | PAGE_READWRITE));
+
+  if (old_rights != new_rights) {
+    if ((new_rights & (PAGE_EXECUTE_READWRITE | PAGE_READWRITE)) == 0)
+      new_rights |= (old_rights & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_WRITECOPY)) ? PAGE_EXECUTE_READWRITE : PAGE_READWRITE;
+    VirtualProtect((void*)last_msg, 208, new_rights, &old_rights);
+  }
+
   return 0;
 }
 

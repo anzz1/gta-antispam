@@ -1,6 +1,6 @@
 workspace "gta-antispam"
    configurations { "Release" }
-   platforms { "Win64" }
+   platforms { "x64" }
    location "build"
    objdir ("build/obj")
    buildlog ("build/log/%{prj.name}.log")
@@ -12,13 +12,14 @@ workspace "gta-antispam"
    intrinsics "On"
    flags { "NoBufferSecurityCheck", "NoIncrementalLink", "NoManifest", "NoPCH", "NoRuntimeChecks", "OmitDefaultLibrary" }
    buildoptions { "/kernel" }
+   linkoptions { "/SAFESEH:NO" }
 
    filter "configurations:Release"
       defines "NDEBUG"
       optimize "Speed"
       symbols "Off"
 
-   filter "platforms:Win64"
+   filter "platforms:x64"
       architecture "x64"
 
 project "gta-antispam"
