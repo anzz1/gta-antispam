@@ -12,7 +12,7 @@ workspace "gta-antispam"
    intrinsics "On"
    flags { "NoBufferSecurityCheck", "NoIncrementalLink", "NoManifest", "NoPCH", "NoRuntimeChecks", "OmitDefaultLibrary" }
    buildoptions { "/kernel" }
-   linkoptions { "/SAFESEH:NO" }
+   linkoptions { "/NODEFAULTLIB", "/SAFESEH:NO", "/EMITPOGOPHASEINFO", "/RELEASE" }
 
    filter "configurations:Release"
       defines "NDEBUG"
